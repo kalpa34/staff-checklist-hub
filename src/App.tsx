@@ -12,6 +12,7 @@ import Departments from "./pages/Departments";
 import Checklists from "./pages/Checklists";
 import ChecklistDetail from "./pages/ChecklistDetail";
 import CreateChecklist from "./pages/CreateChecklist";
+import EditChecklist from "./pages/EditChecklist";
 import Employees from "./pages/Employees";
 import Notifications from "./pages/Notifications";
 import Reports from "./pages/Reports";
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/checklists" element={<Checklists />} />
             <Route path="/checklists/new" element={<CreateChecklist />} />
             <Route path="/checklists/:id" element={<ChecklistDetail />} />
+            <Route path="/checklists/:id/edit" element={<EditChecklist />} />
             <Route path="/employees" element={<Employees />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/reports" element={<Reports />} />
