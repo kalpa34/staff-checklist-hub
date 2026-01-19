@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { Users, UserPlus, Shield, Trash2, Loader2, Building2 } from 'lucide-react';
+import { Users, UserPlus, Shield, Trash2, Loader2, Building2, Plus } from 'lucide-react';
 
 interface Employee {
   id: string;
@@ -58,12 +58,19 @@ export default function Employees() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
 
   const [selectedRole, setSelectedRole] = useState<'admin' | 'employee'>('employee');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
+
+  // Add employee form state
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newFullName, setNewFullName] = useState('');
+  const [newRole, setNewRole] = useState<'admin' | 'employee'>('employee');
 
   useEffect(() => {
     if (!loading && !user) {
@@ -77,7 +84,6 @@ export default function Employees() {
 
   const fetchData = async () => {
     try {
-      // Fetch profiles with roles
       const { data: profiles, error: profilesError } = await supabase
         .from('profiles')
         .select('*')
@@ -85,7 +91,6 @@ export default function Employees() {
 
       if (profilesError) throw profilesError;
 
-      // Fetch roles for each user
       const employeesWithRoles = await Promise.all(
         (profiles || []).map(async (profile: any) => {
           const { data: roleData } = await supabase
@@ -113,7 +118,6 @@ export default function Employees() {
 
       setEmployees(employeesWithRoles);
 
-      // Fetch departments
       const { data: deptData } = await supabase
         .from('departments')
         .select('id, name')
@@ -146,7 +150,6 @@ export default function Employees() {
     setIsSubmitting(true);
 
     try {
-      // Update role
       const { error } = await supabase
         .from('user_roles')
         .update({ role: selectedRole })
@@ -221,6 +224,81 @@ export default function Employees() {
     }
   };
 
+  const handleAddEmployee = async () => {
+    if (!newEmail || !newPassword || !newFullName) {
+      toast.error('Please fill in all fields');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      toast.error('Password must be at least 6 characters');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-users', {
+        body: {
+          action: 'create',
+          email: newEmail,
+          password: newPassword,
+          fullName: newFullName,
+          role: newRole,
+        },
+      });
+
+      if (error) throw error;
+
+      if (data?.error) {
+        toast.error(data.error);
+      } else {
+        toast.success('Employee added successfully');
+        setIsAddDialogOpen(false);
+        setNewEmail('');
+        setNewPassword('');
+        setNewFullName('');
+        setNewRole('employee');
+        fetchData();
+      }
+    } catch (error: any) {
+      console.error('Error adding employee:', error);
+      toast.error(error.message || 'Failed to add employee');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteEmployee = async () => {
+    if (!deleteUserId) return;
+
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-users', {
+        body: {
+          action: 'delete',
+          userId: deleteUserId,
+        },
+      });
+
+      if (error) throw error;
+
+      if (data?.error) {
+        toast.error(data.error);
+      } else {
+        toast.success('Employee removed successfully');
+        setDeleteUserId(null);
+        fetchData();
+      }
+    } catch (error: any) {
+      console.error('Error deleting employee:', error);
+      toast.error(error.message || 'Failed to remove employee');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (loading || isLoading) {
     return (
       <DashboardLayout>
@@ -242,18 +320,11 @@ export default function Employees() {
               Manage employee roles and department assignments
             </p>
           </div>
+          <Button onClick={() => setIsAddDialogOpen(true)} className="gap-2">
+            <Plus className="w-4 h-4" />
+            Add Employee
+          </Button>
         </div>
-
-        {/* Info Card */}
-        <Card className="border-blue-500/20 bg-blue-500/5">
-          <CardContent className="p-4 flex items-start gap-3">
-            <UserPlus className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
-            <p className="text-sm text-muted-foreground">
-              Employees are created when users sign up. You can manage their roles and assign them
-              to departments here.
-            </p>
-          </CardContent>
-        </Card>
 
         {/* Employees List */}
         {employees.length === 0 ? (
@@ -261,9 +332,13 @@ export default function Employees() {
             <CardContent className="flex flex-col items-center justify-center py-12">
               <Users className="w-12 h-12 text-muted-foreground/50 mb-4" />
               <h3 className="text-lg font-medium mb-2">No employees yet</h3>
-              <p className="text-muted-foreground text-center">
-                Employees will appear here when they sign up
+              <p className="text-muted-foreground text-center mb-4">
+                Add your first employee to get started
               </p>
+              <Button onClick={() => setIsAddDialogOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                Add Employee
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -272,9 +347,9 @@ export default function Employees() {
               <Card key={emp.id} className="hover:shadow-md transition-shadow">
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-lg">{emp.full_name}</CardTitle>
-                      <CardDescription>{emp.email}</CardDescription>
+                    <div className="flex-1 min-w-0">
+                      <CardTitle className="text-lg truncate">{emp.full_name}</CardTitle>
+                      <CardDescription className="truncate">{emp.email}</CardDescription>
                     </div>
                     <Badge variant={emp.role === 'admin' ? 'default' : 'secondary'}>
                       {emp.role === 'admin' && <Shield className="w-3 h-3 mr-1" />}
@@ -298,19 +373,103 @@ export default function Employees() {
                       )}
                     </div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleOpenDialog(emp)}
-                    className="w-full"
-                  >
-                    Manage
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleOpenDialog(emp)}
+                      className="flex-1"
+                    >
+                      Manage
+                    </Button>
+                    {emp.user_id !== user?.id && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDeleteUserId(emp.user_id)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             ))}
           </div>
         )}
+
+        {/* Add Employee Dialog */}
+        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          <DialogContent className="bg-card max-w-md">
+            <DialogHeader>
+              <DialogTitle>Add New Employee</DialogTitle>
+              <DialogDescription>
+                Create a new employee account with email and password
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="fullName">Full Name</Label>
+                <Input
+                  id="fullName"
+                  placeholder="John Doe"
+                  value={newFullName}
+                  onChange={(e) => setNewFullName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="john@example.com"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Minimum 6 characters"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Select value={newRole} onValueChange={(v) => setNewRole(v as 'admin' | 'employee')}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover">
+                    <SelectItem value="employee">Employee</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleAddEmployee} disabled={isSubmitting}>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Adding...
+                  </>
+                ) : (
+                  'Add Employee'
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Manage Employee Dialog */}
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -411,6 +570,36 @@ export default function Employees() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={!!deleteUserId} onOpenChange={() => setDeleteUserId(null)}>
+          <AlertDialogContent className="bg-card">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Employee</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to remove this employee? This will delete their account,
+                profile, and all associated data. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteEmployee}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </DashboardLayout>
   );
