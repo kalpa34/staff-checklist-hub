@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/layout/DashboardLayout';
@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, Trash2, Loader2, Upload } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Loader2, Upload, Image as ImageIcon, FileSpreadsheet, X } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 interface Department { id: string; name: string; }
 interface TaskItem { id: string; title: string; description: string; }
@@ -18,12 +20,22 @@ interface TaskItem { id: string; title: string; description: string; }
 export default function CreateChecklist() {
   const navigate = useNavigate();
   const { user, isAdmin, loading } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  
   const [departments, setDepartments] = useState<Department[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [tasks, setTasks] = useState<TaskItem[]>([{ id: '1', title: '', description: '' }]);
+  const [createMode, setCreateMode] = useState<'manual' | 'excel' | 'image'>('manual');
+  
+  // File upload states
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [isParsingExcel, setIsParsingExcel] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) navigate('/auth');
@@ -39,27 +51,141 @@ export default function CreateChecklist() {
   const updateTask = (id: string, field: 'title' | 'description', value: string) => 
     setTasks(tasks.map(t => t.id === id ? { ...t, [field]: value } : t));
 
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadedFile(file);
+    setIsParsingExcel(true);
+
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json<{ title?: string; Title?: string; task?: string; Task?: string; description?: string; Description?: string }>(sheet);
+
+      const parsedTasks: TaskItem[] = json.map((row, i) => ({
+        id: (i + 1).toString(),
+        title: row.title || row.Title || row.task || row.Task || `Task ${i + 1}`,
+        description: row.description || row.Description || ''
+      })).filter(t => t.title.trim());
+
+      if (parsedTasks.length === 0) {
+        toast.error('No valid tasks found in Excel file');
+        setUploadedFile(null);
+      } else {
+        setTasks(parsedTasks);
+        toast.success(`Imported ${parsedTasks.length} tasks from Excel`);
+      }
+    } catch (error) {
+      console.error('Error parsing Excel:', error);
+      toast.error('Failed to parse Excel file');
+      setUploadedFile(null);
+    } finally {
+      setIsParsingExcel(false);
+    }
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload an image file');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image must be less than 5MB');
+      return;
+    }
+
+    setUploadedImage(file);
+    const reader = new FileReader();
+    reader.onload = (event) => setImagePreview(event.target?.result as string);
+    reader.readAsDataURL(file);
+    toast.success('Image uploaded');
+  };
+
+  const clearImage = () => {
+    setUploadedImage(null);
+    setImagePreview(null);
+    if (imageInputRef.current) imageInputRef.current.value = '';
+  };
+
+  const clearExcel = () => {
+    setUploadedFile(null);
+    setTasks([{ id: '1', title: '', description: '' }]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !departmentId) { toast.error('Title and department required'); return; }
+    
     const validTasks = tasks.filter(t => t.title.trim());
-    if (validTasks.length === 0) { toast.error('Add at least one task'); return; }
+    if (createMode === 'manual' && validTasks.length === 0) { toast.error('Add at least one task'); return; }
+    if (createMode === 'image' && !uploadedImage) { toast.error('Please upload an image'); return; }
 
     setIsSubmitting(true);
     try {
+      let fileUrl: string | null = null;
+      let fileType: string = createMode;
+
+      // Upload image if present
+      if (uploadedImage) {
+        const fileExt = uploadedImage.name.split('.').pop();
+        const fileName = `${crypto.randomUUID()}.${fileExt}`;
+        const filePath = `checklists/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('checklist-files')
+          .upload(filePath, uploadedImage);
+
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('checklist-files')
+          .getPublicUrl(filePath);
+
+        fileUrl = publicUrl;
+        fileType = 'image';
+      }
+
+      // Create checklist
       const { data: checklist, error } = await supabase.from('checklists')
-        .insert({ title: title.trim(), description: description.trim() || null, department_id: departmentId, created_by: user?.id, file_type: 'manual' })
+        .insert({ 
+          title: title.trim(), 
+          description: description.trim() || null, 
+          department_id: departmentId, 
+          created_by: user?.id, 
+          file_type: fileType,
+          file_url: fileUrl
+        })
         .select().single();
       if (error) throw error;
 
-      const items = validTasks.map((t, i) => ({ checklist_id: checklist.id, title: t.title.trim(), description: t.description.trim() || null, sort_order: i }));
-      const { error: itemsError } = await supabase.from('checklist_items').insert(items);
-      if (itemsError) throw itemsError;
+      // Insert tasks
+      if (validTasks.length > 0) {
+        const items = validTasks.map((t, i) => ({ 
+          checklist_id: checklist.id, 
+          title: t.title.trim(), 
+          description: t.description.trim() || null, 
+          sort_order: i 
+        }));
+        const { error: itemsError } = await supabase.from('checklist_items').insert(items);
+        if (itemsError) throw itemsError;
+      }
 
       toast.success('Checklist created!');
       navigate('/checklists');
-    } catch (error: any) { toast.error(error.message || 'Failed to create'); } 
-    finally { setIsSubmitting(false); }
+    } catch (error: any) { 
+      console.error('Error creating checklist:', error);
+      toast.error(error.message || 'Failed to create'); 
+    } finally { 
+      setIsSubmitting(false); 
+    }
   };
 
   if (loading) return <DashboardLayout><div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div></DashboardLayout>;
@@ -87,21 +213,148 @@ export default function CreateChecklist() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="flex-row items-center justify-between"><div><CardTitle>Tasks</CardTitle><CardDescription>Add tasks to complete</CardDescription></div><Button type="button" variant="outline" size="sm" onClick={addTask}><Plus className="w-4 h-4 mr-1" />Add</Button></CardHeader>
-            <CardContent className="space-y-4">
-              {tasks.map((task, i) => (
-                <div key={task.id} className="flex gap-3 p-3 border rounded-lg">
-                  <span className="text-muted-foreground font-medium mt-2">{i + 1}.</span>
-                  <div className="flex-1 space-y-2">
-                    <Input value={task.title} onChange={e => updateTask(task.id, 'title', e.target.value)} placeholder="Task title" />
-                    <Input value={task.description} onChange={e => updateTask(task.id, 'description', e.target.value)} placeholder="Optional description" className="text-sm" />
-                  </div>
-                  {tasks.length > 1 && <Button type="button" variant="ghost" size="icon" onClick={() => removeTask(task.id)} className="text-destructive"><Trash2 className="w-4 h-4" /></Button>}
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          <Tabs value={createMode} onValueChange={(v) => setCreateMode(v as any)}>
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="manual">Manual</TabsTrigger>
+              <TabsTrigger value="excel">Excel Import</TabsTrigger>
+              <TabsTrigger value="image">Image</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="manual" className="mt-4">
+              <Card>
+                <CardHeader className="flex-row items-center justify-between">
+                  <div><CardTitle>Tasks</CardTitle><CardDescription>Add tasks manually</CardDescription></div>
+                  <Button type="button" variant="outline" size="sm" onClick={addTask}><Plus className="w-4 h-4 mr-1" />Add</Button>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {tasks.map((task, i) => (
+                    <div key={task.id} className="flex gap-3 p-3 border rounded-lg">
+                      <span className="text-muted-foreground font-medium mt-2">{i + 1}.</span>
+                      <div className="flex-1 space-y-2">
+                        <Input value={task.title} onChange={e => updateTask(task.id, 'title', e.target.value)} placeholder="Task title" />
+                        <Input value={task.description} onChange={e => updateTask(task.id, 'description', e.target.value)} placeholder="Optional description" className="text-sm" />
+                      </div>
+                      {tasks.length > 1 && <Button type="button" variant="ghost" size="icon" onClick={() => removeTask(task.id)} className="text-destructive"><Trash2 className="w-4 h-4" /></Button>}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="excel" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><FileSpreadsheet className="w-5 h-5" />Import from Excel</CardTitle>
+                  <CardDescription>Upload an Excel file with columns: title, description</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <input type="file" ref={fileInputRef} accept=".xlsx,.xls,.csv" onChange={handleExcelUpload} className="hidden" />
+                  
+                  {!uploadedFile ? (
+                    <div 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary transition-colors"
+                    >
+                      <Upload className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
+                      <p className="font-medium">Click to upload Excel file</p>
+                      <p className="text-sm text-muted-foreground mt-1">.xlsx, .xls, or .csv</p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
+                      <div className="flex items-center gap-3">
+                        <FileSpreadsheet className="w-8 h-8 text-green-500" />
+                        <div>
+                          <p className="font-medium">{uploadedFile.name}</p>
+                          <p className="text-sm text-muted-foreground">{tasks.length} tasks imported</p>
+                        </div>
+                      </div>
+                      <Button type="button" variant="ghost" size="icon" onClick={clearExcel}>
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+
+                  {isParsingExcel && (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                      <span>Parsing Excel file...</span>
+                    </div>
+                  )}
+
+                  {uploadedFile && tasks.length > 0 && (
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {tasks.map((task, i) => (
+                        <div key={task.id} className="flex gap-3 p-2 border rounded text-sm">
+                          <span className="text-muted-foreground">{i + 1}.</span>
+                          <div className="flex-1">
+                            <p className="font-medium">{task.title}</p>
+                            {task.description && <p className="text-muted-foreground">{task.description}</p>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="image" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><ImageIcon className="w-5 h-5" />Upload Reference Image</CardTitle>
+                  <CardDescription>Upload an image as a visual checklist reference</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <input type="file" ref={imageInputRef} accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  
+                  {!imagePreview ? (
+                    <div 
+                      onClick={() => imageInputRef.current?.click()}
+                      className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary transition-colors"
+                    >
+                      <ImageIcon className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
+                      <p className="font-medium">Click to upload image</p>
+                      <p className="text-sm text-muted-foreground mt-1">JPG, PNG, or WebP (max 5MB)</p>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <img src={imagePreview} alt="Preview" className="w-full rounded-lg border border-border" />
+                      <Button 
+                        type="button" 
+                        variant="destructive" 
+                        size="icon" 
+                        className="absolute top-2 right-2"
+                        onClick={clearImage}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+
+                  <p className="text-sm text-muted-foreground">
+                    You can also add manual tasks along with the image:
+                  </p>
+                  <Button type="button" variant="outline" size="sm" onClick={addTask}>
+                    <Plus className="w-4 h-4 mr-1" />Add Task
+                  </Button>
+                  
+                  {tasks.filter(t => t.title.trim()).length > 0 && (
+                    <div className="space-y-2">
+                      {tasks.map((task, i) => (
+                        <div key={task.id} className="flex gap-3 p-3 border rounded-lg">
+                          <span className="text-muted-foreground font-medium mt-2">{i + 1}.</span>
+                          <div className="flex-1 space-y-2">
+                            <Input value={task.title} onChange={e => updateTask(task.id, 'title', e.target.value)} placeholder="Task title" />
+                          </div>
+                          {tasks.length > 1 && <Button type="button" variant="ghost" size="icon" onClick={() => removeTask(task.id)} className="text-destructive"><Trash2 className="w-4 h-4" /></Button>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
 
           <div className="flex gap-3">
             <Button type="button" variant="outline" onClick={() => navigate('/checklists')} className="flex-1">Cancel</Button>

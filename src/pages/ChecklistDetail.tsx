@@ -198,6 +198,32 @@ export default function ChecklistDetail() {
           }));
 
           await supabase.from('notifications').insert(notifications);
+
+          // Send push notification via NotificationAPI
+          const { data: adminProfiles } = await supabase
+            .from('profiles')
+            .select('user_id, email, phone')
+            .in('user_id', admins.map(a => a.user_id));
+
+          if (adminProfiles) {
+            for (const profile of adminProfiles) {
+              try {
+                await supabase.functions.invoke('send-notification', {
+                  body: {
+                    userId: profile.user_id,
+                    userEmail: profile.email,
+                    userPhone: profile.phone,
+                    title: 'Checklist Completed',
+                    message: `${checklist.title} has been fully completed`,
+                    sendSms: !!profile.phone,
+                    sendCall: false
+                  }
+                });
+              } catch (err) {
+                console.error('Failed to send notification:', err);
+              }
+            }
+          }
         }
       } else if (!allCompleted) {
         allCompletedNotified.current = false;
