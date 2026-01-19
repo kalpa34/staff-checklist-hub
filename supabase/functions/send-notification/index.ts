@@ -16,6 +16,53 @@ interface NotificationRequest {
   sendCall?: boolean;
 }
 
+// Simple function to send notification via NotificationAPI
+async function sendNotificationAPI(
+  clientId: string,
+  clientSecret: string,
+  options: {
+    userId: string;
+    email: string;
+    phone?: string;
+    title: string;
+    message: string;
+  }
+) {
+  const authHeader = btoa(`${clientId}:${clientSecret}`);
+  
+  const payload = {
+    notificationId: 'hr_management',
+    user: {
+      id: options.userId,
+      email: options.email,
+      number: options.phone || undefined
+    },
+    mergeTags: {
+      title: options.title,
+      message: options.message
+    }
+  };
+
+  console.log('Sending notification with payload:', JSON.stringify(payload));
+
+  const response = await fetch('https://api.notificationapi.com/sender/send', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${authHeader}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('NotificationAPI error:', errorText);
+    throw new Error(`NotificationAPI failed: ${errorText}`);
+  }
+
+  return await response.json();
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -40,19 +87,17 @@ serve(async (req) => {
     });
 
     // Verify the JWT token is valid
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims(token);
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
     
-    if (claimsError || !claimsData?.claims) {
-      console.error('Invalid JWT token:', claimsError);
+    if (authError || !user) {
+      console.error('Invalid JWT token:', authError);
       return new Response(
         JSON.stringify({ error: 'Invalid authentication' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const authenticatedUserId = claimsData.claims.sub;
-    console.log('Authenticated user:', authenticatedUserId);
+    console.log('Authenticated user:', user.id);
 
     const clientId = Deno.env.get('NOTIFICATION_API_CLIENT_ID');
     const clientSecret = Deno.env.get('NOTIFICATION_API_CLIENT_SECRET');
@@ -83,111 +128,24 @@ serve(async (req) => {
       );
     }
 
-    console.log('Sending notification:', { userId: body.userId, title: body.title });
+    console.log('Sending notification to:', body.userEmail);
 
-    const notifications = [];
-
-    // Send email notification (default)
-    const emailPayload = {
-      notificationId: 'checklist_complete',
-      user: {
-        id: body.userId,
-        email: body.userEmail,
-        number: body.userPhone || undefined
-      },
-      mergeTags: {
-        title: body.title,
-        message: body.message
-      }
-    };
-
-    // Send via NotificationAPI
-    const authHeaderApi = btoa(`${clientId}:${clientSecret}`);
-    
-    const response = await fetch('https://api.notificationapi.com/sender/send', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${authHeaderApi}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(emailPayload)
+    // Send notification using the simple function
+    const result = await sendNotificationAPI(clientId, clientSecret, {
+      userId: body.userId,
+      email: body.userEmail,
+      phone: body.userPhone,
+      title: body.title,
+      message: body.message
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('NotificationAPI error:', errorText);
-      return new Response(
-        JSON.stringify({ success: false, error: 'Failed to send notification' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const result = await response.json();
     console.log('Notification sent successfully:', result);
-
-    // If SMS requested and phone available
-    if (body.sendSms && body.userPhone) {
-      console.log('SMS notification requested for:', body.userPhone);
-      const smsPayload = {
-        notificationId: 'checklist_complete_sms',
-        user: {
-          id: body.userId,
-          number: body.userPhone
-        },
-        mergeTags: {
-          title: body.title,
-          message: body.message
-        }
-      };
-
-      const smsResponse = await fetch('https://api.notificationapi.com/sender/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${authHeaderApi}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(smsPayload)
-      });
-
-      if (smsResponse.ok) {
-        notifications.push('sms');
-      }
-    }
-
-    // If call requested and phone available
-    if (body.sendCall && body.userPhone) {
-      console.log('Call notification requested for:', body.userPhone);
-      const callPayload = {
-        notificationId: 'checklist_complete_call',
-        user: {
-          id: body.userId,
-          number: body.userPhone
-        },
-        mergeTags: {
-          title: body.title,
-          message: body.message
-        }
-      };
-
-      const callResponse = await fetch('https://api.notificationapi.com/sender/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${authHeaderApi}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(callPayload)
-      });
-
-      if (callResponse.ok) {
-        notifications.push('call');
-      }
-    }
 
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: 'Notifications sent',
-        channels: ['email', ...notifications]
+        message: 'Notification sent via hr_management template',
+        result
       }),
       { 
         status: 200, 
