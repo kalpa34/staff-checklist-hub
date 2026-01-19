@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   ArrowRight,
   Filter,
+  Pencil,
 } from 'lucide-react';
 
 interface Checklist {
@@ -292,19 +293,34 @@ export default function Checklists() {
                           {checklist.department_name}
                         </CardDescription>
                       </div>
-                      <Badge
-                        variant={isComplete ? 'default' : 'secondary'}
-                        className={isComplete ? 'bg-green-500' : ''}
-                      >
-                        {isComplete ? (
-                          <>
-                            <CheckCircle2 className="w-3 h-3 mr-1" />
-                            Done
-                          </>
-                        ) : (
-                          `${checklist.completed_items}/${checklist.total_items}`
+                      <div className="flex items-center gap-2">
+                        {isAdmin && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/checklists/${checklist.id}/edit`);
+                            }}
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </Button>
                         )}
-                      </Badge>
+                        <Badge
+                          variant={isComplete ? 'default' : 'secondary'}
+                          className={isComplete ? 'bg-green-500' : ''}
+                        >
+                          {isComplete ? (
+                            <>
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Done
+                            </>
+                          ) : (
+                            `${checklist.completed_items}/${checklist.total_items}`
+                          )}
+                        </Badge>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>

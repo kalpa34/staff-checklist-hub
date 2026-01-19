@@ -18,6 +18,7 @@ import {
   Image as ImageIcon,
   FileSpreadsheet,
   Loader2,
+  Pencil,
 } from 'lucide-react';
 
 interface ChecklistItem {
@@ -274,19 +275,27 @@ export default function ChecklistDetail() {
                   <span>{checklist.department_name}</span>
                 </div>
               </div>
-              <Badge
-                variant={isComplete ? 'default' : 'secondary'}
-                className={cn('text-sm px-3 py-1', isComplete && 'bg-green-500')}
-              >
-                {isComplete ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 mr-1" />
-                    Completed
-                  </>
-                ) : (
-                  `${completedCount}/${totalCount} tasks`
+              <div className="flex items-center gap-2">
+                {isAdmin && (
+                  <Button variant="outline" size="sm" onClick={() => navigate(`/checklists/${id}/edit`)}>
+                    <Pencil className="w-4 h-4 mr-1" />
+                    Edit
+                  </Button>
                 )}
-              </Badge>
+                <Badge
+                  variant={isComplete ? 'default' : 'secondary'}
+                  className={cn('text-sm px-3 py-1', isComplete && 'bg-green-500')}
+                >
+                  {isComplete ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 mr-1" />
+                      Completed
+                    </>
+                  ) : (
+                    `${completedCount}/${totalCount} tasks`
+                  )}
+                </Badge>
+              </div>
             </div>
             {checklist.description && (
               <p className="text-muted-foreground mt-2">{checklist.description}</p>
