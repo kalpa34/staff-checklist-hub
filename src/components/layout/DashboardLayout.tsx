@@ -12,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  ClipboardCheck,
   Menu,
   LayoutDashboard,
   Building2,
@@ -66,9 +65,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Logo */}
       <div className="p-4 border-b border-sidebar-border">
         <Link to="/dashboard" className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center">
-            <ClipboardCheck className="w-5 h-5 text-white" />
-          </div>
+          <img src="/favicon.png" alt="CheckList" className="w-10 h-10 rounded-xl" />
           <div className="flex flex-col">
             <span className="font-semibold text-sidebar-foreground">CheckList</span>
             <span className="text-xs text-sidebar-foreground/60">Restaurant Manager</span>
@@ -144,9 +141,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         </Sheet>
 
         <Link to="/dashboard" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg gradient-primary flex items-center justify-center">
-            <ClipboardCheck className="w-4 h-4 text-white" />
-          </div>
+          <img src="/favicon.png" alt="CheckList" className="w-8 h-8 rounded-lg" />
           <span className="font-semibold">CheckList</span>
         </Link>
 
