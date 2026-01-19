@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { departmentSchema } from '@/lib/validation';
 import {
   Dialog,
   DialogContent,
@@ -110,11 +111,19 @@ export default function Departments() {
   };
 
   const handleSubmit = async () => {
-    if (!formName.trim()) {
-      toast.error('Department name is required');
+    // Validate with Zod schema
+    const validationResult = departmentSchema.safeParse({
+      name: formName,
+      description: formDescription || null
+    });
+
+    if (!validationResult.success) {
+      const firstError = validationResult.error.errors[0];
+      toast.error(firstError.message);
       return;
     }
 
+    const validatedData = validationResult.data;
     setIsSubmitting(true);
 
     try {
@@ -123,8 +132,8 @@ export default function Departments() {
         const { error } = await supabase
           .from('departments')
           .update({
-            name: formName.trim(),
-            description: formDescription.trim() || null,
+            name: validatedData.name,
+            description: validatedData.description,
           })
           .eq('id', editingDepartment.id);
 
@@ -135,8 +144,8 @@ export default function Departments() {
         const { error } = await supabase
           .from('departments')
           .insert({
-            name: formName.trim(),
-            description: formDescription.trim() || null,
+            name: validatedData.name,
+            description: validatedData.description,
             created_by: user?.id,
           });
 
@@ -148,7 +157,12 @@ export default function Departments() {
       fetchDepartments();
     } catch (error: any) {
       console.error('Error saving department:', error);
-      toast.error(error.message || 'Failed to save department');
+      // Sanitize error message for policy violations
+      if (error.message?.includes('policy')) {
+        toast.error('You do not have permission for this action');
+      } else {
+        toast.error('Failed to save department');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -170,7 +184,11 @@ export default function Departments() {
       fetchDepartments();
     } catch (error: any) {
       console.error('Error deleting department:', error);
-      toast.error(error.message || 'Failed to delete department');
+      if (error.message?.includes('policy')) {
+        toast.error('You do not have permission for this action');
+      } else {
+        toast.error('Failed to delete department');
+      }
     }
   };
 

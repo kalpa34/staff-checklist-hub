@@ -20,6 +20,14 @@ interface DeleteUserRequest {
 
 type RequestBody = CreateUserRequest | DeleteUserRequest;
 
+// Helper to return generic error messages to clients
+function errorResponse(message: string, status: number) {
+  return new Response(
+    JSON.stringify({ error: message }),
+    { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -29,14 +37,34 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
     if (!serviceRoleKey) {
       console.error('SUPABASE_SERVICE_ROLE_KEY is not configured');
-      return new Response(
-        JSON.stringify({ error: 'Service role key not configured' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return errorResponse('Service not properly configured', 500);
     }
+
+    // Verify the calling user is authenticated
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return errorResponse('Unauthorized', 401);
+    }
+
+    // Create a client with the user's token to verify their identity
+    const supabaseUser = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    // Verify the JWT token
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: claimsError } = await supabaseUser.auth.getClaims(token);
+    
+    if (claimsError || !claimsData?.claims) {
+      console.error('Auth error:', claimsError);
+      return errorResponse('Invalid authentication', 401);
+    }
+
+    const callingUserId = claimsData.claims.sub;
 
     // Create admin client with service role key
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
@@ -46,43 +74,16 @@ Deno.serve(async (req) => {
       },
     });
 
-    // Verify the calling user is an admin
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Authorization header required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Create a client with the user's token to verify their role
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const supabaseUser = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-
-    const { data: { user: callingUser }, error: authError } = await supabaseUser.auth.getUser();
-    if (authError || !callingUser) {
-      console.error('Auth error:', authError);
-      return new Response(
-        JSON.stringify({ error: 'Invalid authentication' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
     // Check if calling user is admin
     const { data: roleData, error: roleError } = await supabaseAdmin
       .from('user_roles')
       .select('role')
-      .eq('user_id', callingUser.id)
+      .eq('user_id', callingUserId)
       .maybeSingle();
 
     if (roleError || roleData?.role !== 'admin') {
       console.error('Not admin or role check failed:', roleError);
-      return new Response(
-        JSON.stringify({ error: 'Admin access required' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return errorResponse('Admin access required', 403);
     }
 
     const body: RequestBody = await req.json();
@@ -92,11 +93,30 @@ Deno.serve(async (req) => {
       // Create a new user
       const { email, password, fullName, role } = body;
 
+      // Validate required fields
       if (!email || !password || !fullName) {
-        return new Response(
-          JSON.stringify({ error: 'Email, password, and full name are required' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse('Email, password, and full name are required', 400);
+      }
+
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return errorResponse('Invalid email format', 400);
+      }
+
+      // Validate password strength
+      if (password.length < 6) {
+        return errorResponse('Password must be at least 6 characters', 400);
+      }
+
+      // Validate name length
+      if (fullName.length > 100) {
+        return errorResponse('Full name is too long', 400);
+      }
+
+      // Validate role
+      if (role && !['admin', 'employee'].includes(role)) {
+        return errorResponse('Invalid role', 400);
       }
 
       // Create user in auth.users
@@ -109,10 +129,11 @@ Deno.serve(async (req) => {
 
       if (createError) {
         console.error('Error creating user:', createError);
-        return new Response(
-          JSON.stringify({ error: createError.message }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        // Return user-friendly message for common errors
+        if (createError.message.includes('already') || createError.message.includes('duplicate')) {
+          return errorResponse('A user with this email already exists', 400);
+        }
+        return errorResponse('Failed to create user', 400);
       }
 
       console.log('User created in auth:', newUser.user.id);
@@ -130,10 +151,7 @@ Deno.serve(async (req) => {
         console.error('Error creating profile:', profileError);
         // Rollback: delete the auth user
         await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
-        return new Response(
-          JSON.stringify({ error: 'Failed to create profile' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse('Failed to create user profile', 500);
       }
 
       console.log('Profile created');
@@ -151,10 +169,7 @@ Deno.serve(async (req) => {
         // Rollback
         await supabaseAdmin.from('profiles').delete().eq('user_id', newUser.user.id);
         await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
-        return new Response(
-          JSON.stringify({ error: 'Failed to assign role' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse('Failed to assign user role', 500);
       }
 
       console.log('Role assigned:', role || 'employee');
@@ -176,18 +191,18 @@ Deno.serve(async (req) => {
       const { userId } = body;
 
       if (!userId) {
-        return new Response(
-          JSON.stringify({ error: 'User ID is required' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse('User ID is required', 400);
+      }
+
+      // Validate userId format (UUID)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) {
+        return errorResponse('Invalid user ID format', 400);
       }
 
       // Prevent self-deletion
-      if (userId === callingUser.id) {
-        return new Response(
-          JSON.stringify({ error: 'Cannot delete your own account' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      if (userId === callingUserId) {
+        return errorResponse('Cannot delete your own account', 400);
       }
 
       console.log('Deleting user:', userId);
@@ -227,10 +242,7 @@ Deno.serve(async (req) => {
 
       if (deleteError) {
         console.error('Error deleting auth user:', deleteError);
-        return new Response(
-          JSON.stringify({ error: deleteError.message }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse('Failed to delete user', 500);
       }
 
       console.log('User deleted successfully');
@@ -241,16 +253,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    return new Response(
-      JSON.stringify({ error: 'Invalid action' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return errorResponse('Invalid action', 400);
 
   } catch (error) {
     console.error('Unexpected error:', error);
-    return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return errorResponse('An unexpected error occurred', 500);
   }
 });

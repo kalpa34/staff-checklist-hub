@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -22,15 +23,66 @@ serve(async (req) => {
   }
 
   try {
+    // Verify authentication
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    // Verify the JWT token is valid
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims(token);
+    
+    if (claimsError || !claimsData?.claims) {
+      console.error('Invalid JWT token:', claimsError);
+      return new Response(
+        JSON.stringify({ error: 'Invalid authentication' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const authenticatedUserId = claimsData.claims.sub;
+    console.log('Authenticated user:', authenticatedUserId);
+
     const clientId = Deno.env.get('NOTIFICATION_API_CLIENT_ID');
     const clientSecret = Deno.env.get('NOTIFICATION_API_CLIENT_SECRET');
 
     if (!clientId || !clientSecret) {
       console.error('Missing NotificationAPI credentials');
-      throw new Error('NotificationAPI credentials not configured');
+      return new Response(
+        JSON.stringify({ success: false, error: 'Notification service not configured' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     const body: NotificationRequest = await req.json();
+    
+    // Validate required fields
+    if (!body.userId || !body.userEmail || !body.title || !body.message) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Missing required fields' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Validate input lengths
+    if (body.title.length > 200 || body.message.length > 2000) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Title or message too long' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     console.log('Sending notification:', { userId: body.userId, title: body.title });
 
     const notifications = [];
@@ -50,12 +102,12 @@ serve(async (req) => {
     };
 
     // Send via NotificationAPI
-    const authHeader = btoa(`${clientId}:${clientSecret}`);
+    const authHeaderApi = btoa(`${clientId}:${clientSecret}`);
     
     const response = await fetch('https://api.notificationapi.com/sender/send', {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${authHeader}`,
+        'Authorization': `Basic ${authHeaderApi}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(emailPayload)
@@ -64,7 +116,10 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('NotificationAPI error:', errorText);
-      throw new Error(`NotificationAPI error: ${response.status}`);
+      return new Response(
+        JSON.stringify({ success: false, error: 'Failed to send notification' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     const result = await response.json();
@@ -88,7 +143,7 @@ serve(async (req) => {
       const smsResponse = await fetch('https://api.notificationapi.com/sender/send', {
         method: 'POST',
         headers: {
-          'Authorization': `Basic ${authHeader}`,
+          'Authorization': `Basic ${authHeaderApi}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(smsPayload)
@@ -117,7 +172,7 @@ serve(async (req) => {
       const callResponse = await fetch('https://api.notificationapi.com/sender/send', {
         method: 'POST',
         headers: {
-          'Authorization': `Basic ${authHeader}`,
+          'Authorization': `Basic ${authHeaderApi}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(callPayload)
@@ -141,10 +196,9 @@ serve(async (req) => {
     );
 
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Error sending notification:', errorMessage);
+    console.error('Error sending notification:', error);
     return new Response(
-      JSON.stringify({ success: false, error: errorMessage }),
+      JSON.stringify({ success: false, error: 'An unexpected error occurred' }),
       { 
         status: 500, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
