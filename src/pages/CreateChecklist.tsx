@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, Trash2, Loader2, Upload, Image as ImageIcon, FileSpreadsheet, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { checklistSchema, validateExcelTasks, MAX_EXCEL_TASKS } from '@/lib/validation';
 
 interface Department { id: string; name: string; }
 interface TaskItem { id: string; title: string; description: string; }
@@ -65,18 +66,27 @@ export default function CreateChecklist() {
       const sheet = workbook.Sheets[sheetName];
       const json = XLSX.utils.sheet_to_json<{ title?: string; Title?: string; task?: string; Task?: string; description?: string; Description?: string }>(sheet);
 
-      const parsedTasks: TaskItem[] = json.map((row, i) => ({
-        id: (i + 1).toString(),
-        title: row.title || row.Title || row.task || row.Task || `Task ${i + 1}`,
-        description: row.description || row.Description || ''
-      })).filter(t => t.title.trim());
+      // Map raw Excel data to task format
+      const rawTasks = json.map((row) => ({
+        title: (row.title || row.Title || row.task || row.Task || '').toString(),
+        description: (row.description || row.Description || '').toString()
+      }));
 
-      if (parsedTasks.length === 0) {
+      // Validate with our validation library
+      const { validTasks, errors } = validateExcelTasks(rawTasks);
+
+      if (errors.length > 0) {
+        errors.forEach(err => toast.error(err));
+        setUploadedFile(null);
+        return;
+      }
+
+      if (validTasks.length === 0) {
         toast.error('No valid tasks found in Excel file');
         setUploadedFile(null);
       } else {
-        setTasks(parsedTasks);
-        toast.success(`Imported ${parsedTasks.length} tasks from Excel`);
+        setTasks(validTasks);
+        toast.success(`Imported ${validTasks.length} tasks from Excel`);
       }
     } catch (error) {
       console.error('Error parsing Excel:', error);
@@ -122,7 +132,19 @@ export default function CreateChecklist() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !departmentId) { toast.error('Title and department required'); return; }
+    
+    // Validate checklist details with Zod
+    const validationResult = checklistSchema.safeParse({
+      title,
+      description: description || null,
+      departmentId
+    });
+
+    if (!validationResult.success) {
+      const firstError = validationResult.error.errors[0];
+      toast.error(firstError.message);
+      return;
+    }
     
     const validTasks = tasks.filter(t => t.title.trim());
     if (createMode === 'manual' && validTasks.length === 0) { toast.error('Add at least one task'); return; }
@@ -153,12 +175,12 @@ export default function CreateChecklist() {
         fileType = 'image';
       }
 
-      // Create checklist
+      // Create checklist with validated data
       const { data: checklist, error } = await supabase.from('checklists')
         .insert({ 
-          title: title.trim(), 
-          description: description.trim() || null, 
-          department_id: departmentId, 
+          title: validationResult.data.title.trim(), 
+          description: validationResult.data.description?.trim() || null, 
+          department_id: validationResult.data.departmentId, 
           created_by: user?.id, 
           file_type: fileType,
           file_url: fileUrl
@@ -166,12 +188,12 @@ export default function CreateChecklist() {
         .select().single();
       if (error) throw error;
 
-      // Insert tasks
+      // Insert tasks with validated/truncated values
       if (validTasks.length > 0) {
         const items = validTasks.map((t, i) => ({ 
           checklist_id: checklist.id, 
-          title: t.title.trim(), 
-          description: t.description.trim() || null, 
+          title: t.title.trim().substring(0, 200), 
+          description: t.description?.trim().substring(0, 500) || null, 
           sort_order: i 
         }));
         const { error: itemsError } = await supabase.from('checklist_items').insert(items);
@@ -182,7 +204,11 @@ export default function CreateChecklist() {
       navigate('/checklists');
     } catch (error: any) { 
       console.error('Error creating checklist:', error);
-      toast.error(error.message || 'Failed to create'); 
+      if (error.message?.includes('policy')) {
+        toast.error('You do not have permission for this action');
+      } else {
+        toast.error('Failed to create checklist');
+      }
     } finally { 
       setIsSubmitting(false); 
     }
