@@ -16,7 +16,7 @@ import EditChecklist from "./pages/EditChecklist";
 import Employees from "./pages/Employees";
 import Notifications from "./pages/Notifications";
 import Reports from "./pages/Reports";
-import NotFound from "./pages/NotFound";
+
 
 const queryClient = new QueryClient();
 
@@ -40,7 +40,7 @@ const App = () => (
             <Route path="/employees" element={<Employees />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/reports" element={<Reports />} />
-            <Route path="*" element={<NotFound />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
