@@ -200,6 +200,59 @@ export default function CreateChecklist() {
         if (itemsError) throw itemsError;
       }
 
+      // Get department name for notification
+      const selectedDept = departments.find(d => d.id === departmentId);
+      const departmentName = selectedDept?.name || 'Department';
+
+      // Send SMS notifications to employees assigned to this department
+      const { data: assignments } = await supabase
+        .from('employee_assignments')
+        .select('user_id')
+        .eq('department_id', departmentId);
+
+      if (assignments && assignments.length > 0) {
+        // Get employee profiles with phone numbers
+        const { data: employeeProfiles } = await supabase
+          .from('profiles')
+          .select('user_id, full_name, email, phone')
+          .in('user_id', assignments.map(a => a.user_id));
+
+        // Send SMS to each employee with a phone number
+        if (employeeProfiles) {
+          for (const profile of employeeProfiles) {
+            if (profile.phone) {
+              try {
+                await supabase.functions.invoke('send-notification', {
+                  body: {
+                    userId: profile.user_id,
+                    userEmail: profile.email,
+                    userPhone: profile.phone,
+                    employeeName: profile.full_name,
+                    departmentName: departmentName,
+                    checklistTitle: title,
+                    notificationType: 'checklist_assigned'
+                  }
+                });
+                console.log(`SMS sent to ${profile.full_name}`);
+              } catch (err) {
+                console.error('Failed to send notification to employee:', err);
+              }
+            }
+          }
+        }
+
+        // Create in-app notifications for employees
+        const notifications = assignments.map((a) => ({
+          user_id: a.user_id,
+          title: 'New Checklist Assigned',
+          message: `You have been assigned a new checklist: ${title}`,
+          type: 'checklist_assigned',
+          related_checklist_id: checklist.id,
+        }));
+
+        await supabase.from('notifications').insert(notifications);
+      }
+
       toast.success('Checklist created!');
       navigate('/checklists');
     } catch (error: any) { 

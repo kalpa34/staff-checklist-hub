@@ -183,6 +183,15 @@ export default function ChecklistDetail() {
           description: 'Great job completing all tasks!',
         });
 
+        // Get current user's profile for the notification
+        const { data: employeeProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        const employeeName = employeeProfile?.full_name || user.email || 'Employee';
+
         // Create notification for admins
         const { data: admins } = await supabase
           .from('user_roles')
@@ -193,14 +202,14 @@ export default function ChecklistDetail() {
           const notifications = admins.map((admin) => ({
             user_id: admin.user_id,
             title: 'Checklist Completed',
-            message: `${checklist.title} has been fully completed`,
+            message: `${employeeName} in "${checklist.department_name}" has completed the checklist "${checklist.title}"`,
             type: 'all_tasks_complete' as const,
             related_checklist_id: checklist.id,
           }));
 
           await supabase.from('notifications').insert(notifications);
 
-          // Send push notification via NotificationAPI
+          // Send SMS notification via NotificationAPI to admins
           const { data: adminProfiles } = await supabase
             .from('profiles')
             .select('user_id, email, phone')
@@ -208,20 +217,23 @@ export default function ChecklistDetail() {
 
           if (adminProfiles) {
             for (const profile of adminProfiles) {
-              try {
-                await supabase.functions.invoke('send-notification', {
-                  body: {
-                    userId: profile.user_id,
-                    userEmail: profile.email,
-                    userPhone: profile.phone,
-                    title: 'Checklist Completed',
-                    message: `${checklist.title} has been fully completed`,
-                    sendSms: !!profile.phone,
-                    sendCall: false
-                  }
-                });
-              } catch (err) {
-                console.error('Failed to send notification:', err);
+              if (profile.phone) {
+                try {
+                  await supabase.functions.invoke('send-notification', {
+                    body: {
+                      userId: profile.user_id,
+                      userEmail: profile.email,
+                      userPhone: profile.phone,
+                      employeeName: employeeName,
+                      departmentName: checklist.department_name,
+                      checklistTitle: checklist.title,
+                      notificationType: 'checklist_completed'
+                    }
+                  });
+                  console.log(`SMS sent to admin ${profile.email}`);
+                } catch (err) {
+                  console.error('Failed to send notification:', err);
+                }
               }
             }
           }
