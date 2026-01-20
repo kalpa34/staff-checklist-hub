@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { Loader2, Save, Bell, Phone, User } from 'lucide-react';
+import { Loader2, Save, Bell, Phone, User, Send } from 'lucide-react';
 
 interface ProfileData {
   full_name: string;
@@ -23,6 +23,7 @@ export default function Settings() {
   const { user, loading } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSendingTest, setIsSendingTest] = useState(false);
   const [profile, setProfile] = useState<ProfileData>({
     full_name: '',
     email: '',
@@ -57,7 +58,7 @@ export default function Settings() {
           full_name: data.full_name || '',
           email: data.email || '',
           phone: data.phone || '',
-          sms_notifications_enabled: true, // Default to enabled
+          sms_notifications_enabled: true,
         });
       }
     } catch (error) {
@@ -96,6 +97,52 @@ export default function Settings() {
       toast.error('Failed to save settings');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleTestSMS = async () => {
+    if (!user) return;
+
+    if (!profile.phone) {
+      toast.error('Please enter and save a phone number first');
+      return;
+    }
+
+    // Validate phone number format
+    if (!profile.phone.match(/^\+?[1-9]\d{9,14}$/)) {
+      toast.error('Please enter a valid phone number with country code');
+      return;
+    }
+
+    setIsSendingTest(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('send-notification', {
+        body: {
+          userId: user.id,
+          userEmail: profile.email,
+          userPhone: profile.phone,
+          employeeName: profile.full_name || 'User',
+          departmentName: 'Test Department',
+          checklistTitle: 'Test Checklist',
+          notificationType: 'checklist_assigned'
+        }
+      });
+
+      if (error) throw error;
+
+      if (data?.success) {
+        toast.success('Test SMS sent! Check your phone.');
+      } else if (data?.message?.includes('Skipped')) {
+        toast.error('SMS was skipped - please verify your phone number is saved');
+      } else {
+        toast.error(data?.error || 'Failed to send test SMS');
+      }
+    } catch (error: any) {
+      console.error('Error sending test SMS:', error);
+      toast.error('Failed to send test SMS');
+    } finally {
+      setIsSendingTest(false);
     }
   };
 
@@ -170,15 +217,34 @@ export default function Settings() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="phone">Phone Number</Label>
-              <Input
-                id="phone"
-                type="tel"
-                value={profile.phone}
-                onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                placeholder="+94761938373"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="phone"
+                  type="tel"
+                  value={profile.phone}
+                  onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                  placeholder="+94761938373"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleTestSMS}
+                  disabled={isSendingTest || !profile.phone}
+                  className="shrink-0"
+                >
+                  {isSendingTest ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-2" />
+                      Test SMS
+                    </>
+                  )}
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Enter your phone number with country code (e.g., +94 for Sri Lanka)
+                Enter your phone number with country code (e.g., +94 for Sri Lanka). Click "Test SMS" to verify.
               </p>
             </div>
 
