@@ -10,13 +10,13 @@ interface NotificationRequest {
   userId: string;
   userEmail: string;
   userPhone?: string;
-  title: string;
-  message: string;
-  sendSms?: boolean;
-  sendCall?: boolean;
+  employeeName?: string;
+  departmentName?: string;
+  checklistTitle?: string;
+  notificationType: 'checklist_assigned' | 'checklist_completed';
 }
 
-// Simple function to send notification via NotificationAPI
+// Send notification via NotificationAPI
 async function sendNotificationAPI(
   clientId: string,
   clientSecret: string,
@@ -24,22 +24,41 @@ async function sendNotificationAPI(
     userId: string;
     email: string;
     phone?: string;
-    title: string;
-    message: string;
+    employeeName?: string;
+    departmentName?: string;
+    checklistTitle?: string;
+    notificationType: 'checklist_assigned' | 'checklist_completed';
   }
 ) {
   const authHeader = btoa(`${clientId}:${clientSecret}`);
   
+  // Build merge tags based on notification type
+  let title: string;
+  let message: string;
+
+  if (options.notificationType === 'checklist_assigned') {
+    // SMS for employee when checklist is assigned
+    title = options.departmentName || 'Department';
+    message = `${options.employeeName || 'Employee'}, the admin has given you a checklist "${options.checklistTitle || 'New Checklist'}". Start doing it.`;
+  } else {
+    // SMS for admin when employee completes checklist
+    title = 'Checklist Completed';
+    message = `${options.employeeName || 'Employee'} in "${options.departmentName || 'Department'}" has completed the checklist assigned to them.`;
+  }
+
   const payload = {
-    notificationId: 'hr_management',
+    notificationId: 'notificantios',
     user: {
       id: options.userId,
       email: options.email,
       number: options.phone || undefined
     },
     mergeTags: {
-      title: options.title,
-      message: options.message
+      title: title,
+      message: message,
+      employeeName: options.employeeName || '',
+      departmentName: options.departmentName || '',
+      checklistTitle: options.checklistTitle || ''
     }
   };
 
@@ -113,30 +132,33 @@ serve(async (req) => {
     const body: NotificationRequest = await req.json();
     
     // Validate required fields
-    if (!body.userId || !body.userEmail || !body.title || !body.message) {
+    if (!body.userId || !body.userEmail || !body.notificationType) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Missing required fields' }),
+        JSON.stringify({ success: false, error: 'Missing required fields: userId, userEmail, notificationType' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Validate input lengths
-    if (body.title.length > 200 || body.message.length > 2000) {
+    // Skip if no phone number for SMS
+    if (!body.userPhone) {
+      console.log('No phone number provided, skipping SMS notification');
       return new Response(
-        JSON.stringify({ success: false, error: 'Title or message too long' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ success: true, message: 'Skipped - no phone number' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log('Sending notification to:', body.userEmail);
+    console.log(`Sending ${body.notificationType} notification to:`, body.userEmail);
 
-    // Send notification using the simple function
+    // Send notification using NotificationAPI
     const result = await sendNotificationAPI(clientId, clientSecret, {
       userId: body.userId,
       email: body.userEmail,
       phone: body.userPhone,
-      title: body.title,
-      message: body.message
+      employeeName: body.employeeName,
+      departmentName: body.departmentName,
+      checklistTitle: body.checklistTitle,
+      notificationType: body.notificationType
     });
 
     console.log('Notification sent successfully:', result);
@@ -144,7 +166,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: 'Notification sent via hr_management template',
+        message: `${body.notificationType} notification sent`,
         result
       }),
       { 

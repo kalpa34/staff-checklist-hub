@@ -43,6 +43,7 @@ const navItems: NavItem[] = [
   { label: 'Employees', href: '/employees', icon: <Users className="w-5 h-5" />, adminOnly: true },
   { label: 'Notifications', href: '/notifications', icon: <Bell className="w-5 h-5" /> },
   { label: 'Reports', href: '/reports', icon: <BarChart3 className="w-5 h-5" />, adminOnly: true },
+  { label: 'Settings', href: '/settings', icon: <Settings className="w-5 h-5" /> },
 ];
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
